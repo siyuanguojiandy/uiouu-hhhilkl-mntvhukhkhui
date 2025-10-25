@@ -139,6 +139,9 @@ export class D1Storage implements IStorage {
     key: string
   ): Promise<PlayRecord | null> {
     const [source, videoId] = key.split('+');
+    if (!source || !videoId) {
+      return null;
+    }
     const userId = await this.getUserId(userName);
     if (!userId) return null;
 
@@ -174,6 +177,9 @@ export class D1Storage implements IStorage {
     record: PlayRecord
   ): Promise<void> {
     const [source, videoId] = key.split('+');
+    if (!source || !videoId) {
+      throw new Error('Invalid key format for play record');
+    }
     const userId = await this.ensureUser(userName);
 
     await this.db
@@ -202,16 +208,16 @@ export class D1Storage implements IStorage {
         userId,
         source,
         videoId,
-        record.title,
-        record.source_name,
-        record.year,
-        record.cover,
-        record.index,
-        record.total_episodes,
-        record.play_time,
-        record.total_time,
-        record.save_time,
-        record.search_title
+        record.title || '',
+        record.source_name || '',
+        record.year || '',
+        record.cover || '',
+        record.index ?? 0,
+        record.total_episodes ?? 0,
+        record.play_time ?? 0,
+        record.total_time ?? 0,
+        record.save_time ?? Date.now(),
+        record.search_title || ''
       )
       .run();
   }
@@ -249,6 +255,9 @@ export class D1Storage implements IStorage {
 
   async deletePlayRecord(userName: string, key: string): Promise<void> {
     const [source, videoId] = key.split('+');
+    if (!source || !videoId) {
+      return;
+    }
     const userId = await this.getUserId(userName);
     if (!userId) return;
 
@@ -263,6 +272,9 @@ export class D1Storage implements IStorage {
   // ---------- 收藏 ----------
   async getFavorite(userName: string, key: string): Promise<Favorite | null> {
     const [source, videoId] = key.split('+');
+    if (!source || !videoId) {
+      return null;
+    }
     const userId = await this.getUserId(userName);
     if (!userId) return null;
 
@@ -292,6 +304,9 @@ export class D1Storage implements IStorage {
     favorite: Favorite
   ): Promise<void> {
     const [source, videoId] = key.split('+');
+    if (!source || !videoId) {
+      throw new Error('Invalid key format for favorite');
+    }
     const userId = await this.ensureUser(userName);
 
     await this.db
@@ -315,13 +330,13 @@ export class D1Storage implements IStorage {
         userId,
         source,
         videoId,
-        favorite.title,
-        favorite.source_name,
-        favorite.year,
-        favorite.cover,
-        favorite.total_episodes,
-        favorite.save_time,
-        favorite.search_title
+        favorite.title || '',
+        favorite.source_name || '',
+        favorite.year || '',
+        favorite.cover || '',
+        favorite.total_episodes ?? 0,
+        favorite.save_time ?? Date.now(),
+        favorite.search_title || ''
       )
       .run();
   }
@@ -354,6 +369,9 @@ export class D1Storage implements IStorage {
 
   async deleteFavorite(userName: string, key: string): Promise<void> {
     const [source, videoId] = key.split('+');
+    if (!source || !videoId) {
+      return;
+    }
     const userId = await this.getUserId(userName);
     if (!userId) return;
 
@@ -447,142 +465,31 @@ export class D1Storage implements IStorage {
 
   // ---------- 管理员配置 ----------
   async getAdminConfig(): Promise<AdminConfig | null> {
-    const configResult = await this.db
-      .prepare('SELECT * FROM admin_config ORDER BY id DESC LIMIT 1')
-      .first();
+    try {
+      const result = await this.db
+        .prepare('SELECT config FROM admin_config WHERE id = 1')
+        .first<{ config: string }>();
 
-    if (!configResult) return null;
+      if (!result) return null;
 
-    // 获取用户列表
-    const usersResult = await this.db
-      .prepare('SELECT username, role, banned FROM users')
-      .all();
-
-    const users = (usersResult.results || []).map((user: any) => ({
-      username: user.username as string,
-      role: user.role as 'user' | 'admin' | 'owner',
-      banned: Boolean(user.banned),
-    }));
-
-    // 获取源配置
-    const sourcesResult = await this.db
-      .prepare('SELECT * FROM source_configs')
-      .all();
-
-    const sources = (sourcesResult.results || []).map((source: any) => ({
-      key: source.config_key as string,
-      name: source.name as string,
-      api: source.api as string,
-      detail: source.detail as string,
-      from: source.source_from as 'config' | 'custom',
-      disabled: Boolean(source.disabled),
-    }));
-
-    // 获取自定义分类
-    const categoriesResult = await this.db
-      .prepare('SELECT * FROM custom_categories')
-      .all();
-
-    const customCategories = (categoriesResult.results || []).map(
-      (category: any) => ({
-        name: category.name as string,
-        type: category.category_type as 'movie' | 'tv',
-        query: category.query as string,
-        from: category.category_from as 'config' | 'custom',
-        disabled: Boolean(category.disabled),
-      })
-    );
-
-    return {
-      ConfigFile: configResult.config_file as string,
-      SiteConfig: {
-        SiteName: configResult.site_name as string,
-        Announcement: configResult.announcement as string,
-        SearchDownstreamMaxPage:
-          configResult.search_downstream_max_page as number,
-        SiteInterfaceCacheTime:
-          configResult.site_interface_cache_time as number,
-        DoubanProxyType: configResult.douban_proxy_type as string,
-        DoubanProxy: configResult.douban_proxy as string,
-        DoubanImageProxyType: configResult.douban_image_proxy_type as string,
-        DoubanImageProxy: configResult.douban_image_proxy as string,
-        DisableYellowFilter: Boolean(configResult.disable_yellow_filter),
-      },
-      UserConfig: {
-        AllowRegister: Boolean(configResult.allow_register),
-        Users: users,
-      },
-      SourceConfig: sources,
-      CustomCategories: customCategories,
-    };
+      return JSON.parse(result.config) as AdminConfig;
+    } catch (err) {
+      console.error('Failed to get admin config:', err);
+      throw err;
+    }
   }
 
   async setAdminConfig(config: AdminConfig): Promise<void> {
-    // 保存主配置
-    await this.db
-      .prepare(
-        `
-        INSERT INTO admin_config
-        (config_file, site_name, announcement, search_downstream_max_page,
-         site_interface_cache_time, allow_register, douban_proxy_type, douban_proxy,
-         douban_image_proxy_type, douban_image_proxy, disable_yellow_filter)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `
-      )
-      .bind(
-        config.ConfigFile,
-        config.SiteConfig.SiteName,
-        config.SiteConfig.Announcement,
-        config.SiteConfig.SearchDownstreamMaxPage,
-        config.SiteConfig.SiteInterfaceCacheTime,
-        config.UserConfig.AllowRegister ? 1 : 0,
-        config.SiteConfig.DoubanProxyType,
-        config.SiteConfig.DoubanProxy,
-        config.SiteConfig.DoubanImageProxyType,
-        config.SiteConfig.DoubanImageProxy,
-        config.SiteConfig.DisableYellowFilter ? 1 : 0
-      )
-      .run();
-
-    // 清空并重新插入源配置
-    await this.db.prepare('DELETE FROM source_configs').run();
-    for (const source of config.SourceConfig) {
+    try {
       await this.db
         .prepare(
-          `
-          INSERT INTO source_configs (config_key, name, api, detail, source_from, disabled)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `
+          'INSERT OR REPLACE INTO admin_config (id, config) VALUES (1, ?)'
         )
-        .bind(
-          source.key,
-          source.name,
-          source.api,
-          source.detail,
-          source.from,
-          source.disabled ? 1 : 0
-        )
+        .bind(JSON.stringify(config))
         .run();
-    }
-
-    // 清空并重新插入自定义分类
-    await this.db.prepare('DELETE FROM custom_categories').run();
-    for (const category of config.CustomCategories) {
-      await this.db
-        .prepare(
-          `
-          INSERT INTO custom_categories (name, category_type, query, category_from, disabled)
-          VALUES (?, ?, ?, ?, ?)
-        `
-        )
-        .bind(
-          category.name,
-          category.type,
-          category.query,
-          category.from,
-          category.disabled ? 1 : 0
-        )
-        .run();
+    } catch (err) {
+      console.error('Failed to set admin config:', err);
+      throw err;
     }
   }
 
@@ -637,8 +544,8 @@ export class D1Storage implements IStorage {
         source,
         id,
         config.enable ? 1 : 0,
-        config.intro_time,
-        config.outro_time
+        config.intro_time ?? 0,
+        config.outro_time ?? 0
       )
       .run();
   }
@@ -681,5 +588,16 @@ export class D1Storage implements IStorage {
     }
 
     return configs;
+  }
+
+  // 清空所有数据
+  async clearAllData(): Promise<void> {
+    // 删除所有表的数据
+    await this.db.prepare('DELETE FROM play_records').run();
+    await this.db.prepare('DELETE FROM favorites').run();
+    await this.db.prepare('DELETE FROM search_history').run();
+    await this.db.prepare('DELETE FROM skip_configs').run();
+    await this.db.prepare('DELETE FROM users').run();
+    await this.db.prepare('DELETE FROM admin_config').run();
   }
 }
